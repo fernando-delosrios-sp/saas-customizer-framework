@@ -167,9 +167,9 @@ Or bind to the attribute: `"afterStdAccountRead.sponsors": ["getSponsors"]`.
 
 #### `getAppGroups` — SPN group assignments
 
-**What for:** On service principal (enterprise app) accounts, fetch Users and groups assignments via Graph `appRoleAssignedTo` and write unique group object IDs to `attributes.spn_app_groups`. Skips normal user accounts (requires `attributes.spn_app_id`).
+**What for:** On service principal (enterprise app) accounts, fetch Users and groups assignments via Graph `appRoleAssignedTo` and write unique group object IDs to `attributes.spn_app_groups`. Skips normal user accounts (requires `attributes.spn_appId`).
 
-**How to use:** ensure SPN accounts expose `spn_app_id` and optionally `objectId`. Add a multi-valued account attribute `spn_app_groups`, then:
+**How to use:** ensure SPN accounts expose `spn_appId` and `objectId`. The Entra connector reports `objectId` as a composite native id (`{servicePrincipalObjectId}:{applicationObjectId}`, or `:EXT` for apps from another tenant); the operation uses the first segment for the Graph call. Add a multi-valued account attribute `spn_app_groups`, then:
 
 ```json
 "afterStdAccountList.*": ["getAppGroups"],

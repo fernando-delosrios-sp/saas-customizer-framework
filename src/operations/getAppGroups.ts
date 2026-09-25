@@ -6,7 +6,7 @@
  * the unique group object IDs to `spn_app_groups`. Individual users and
  * other principal types are ignored.
  *
- * Only runs when `attributes.spn_app_id` is present (SPN accounts).
+ * Only runs when `attributes.spn_appId` is present (SPN accounts).
  */
 import { readConfig } from '@sailpoint/connector-sdk'
 import { EntraIdClient } from '../entraid-client'
@@ -20,19 +20,23 @@ export const getAppGroups: AfterOperation<AccountAfterOperationInput> = async (c
 
     const out: any = output
 
-    // Only process service principal accounts (users lack spn_app_id)
-    if (out.attributes?.spn_app_id == null) {
+    // Only process service principal accounts (users lack spn_appId)
+    if (out.attributes?.spn_appId == null) {
         logger.debug('getAppGroups: not a service principal account, skipping')
         return undefined
     }
 
-    const servicePrincipalId =
+    const nativeId =
         out.attributes?.objectId ??
         out.identity ??
         out.id ??
         out.uuid ??
         out.key?.simple?.id ??
         out.attributes?.id
+
+    // SPN native ids are composite: `{servicePrincipalObjectId}:{applicationObjectId}`,
+    // or `{servicePrincipalObjectId}:EXT` for apps owned by another tenant.
+    const servicePrincipalId = typeof nativeId === 'string' ? nativeId.split(':')[0] : undefined
 
     if (!servicePrincipalId) {
         logger.debug('getAppGroups: no service principal identity found, returning undefined')
