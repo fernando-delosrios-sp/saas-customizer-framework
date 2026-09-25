@@ -141,4 +141,35 @@ export class EntraIdClient {
             throw error
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Service principal methods
+    // -----------------------------------------------------------------------
+
+    /**
+     * Fetches all app role assignments targeting a service principal
+     * (Users and groups blade on the enterprise application).
+     * Follows @odata.nextLink until all pages are retrieved.
+     */
+    async getAppRoleAssignedTo(servicePrincipalId: string): Promise<any[]> {
+        try {
+            const assignments: any[] = []
+            let response = await this.graphClient
+                .api(`/servicePrincipals/${servicePrincipalId}/appRoleAssignedTo`)
+                .get()
+
+            assignments.push(...((response.value as any[]) ?? []))
+
+            while (response['@odata.nextLink']) {
+                response = await this.graphClient.api(response['@odata.nextLink']).get()
+                assignments.push(...((response.value as any[]) ?? []))
+            }
+
+            return assignments
+        } catch (error) {
+            logger.error(`Error fetching appRoleAssignedTo for service principal ${servicePrincipalId}:`)
+            logger.error(error)
+            return []
+        }
+    }
 }

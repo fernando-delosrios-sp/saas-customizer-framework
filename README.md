@@ -8,12 +8,12 @@ A framework for building SailPoint SaaS Connector Customizers that extend any [s
 
 ```
 index.ts                      ← entry point: wires handlers to SDK commands
-├── customOperations.ts       ← operation maps defining when logic runs (before/after hooks)
-├── operationRunner.ts        ← generic engine: runBeforeOperations / runAfterOperations
+├── customOperations.ts       ← named registry of available operation implementations
+├── operationRunner.ts        ← generic engine: resolves source config → runs operations
 ├── utils.ts                  ← general utilities
 ├── model/
 │   ├── operation.ts          ← Operation / OperationMap type definitions
-│   └── config.ts             ← connector configuration interface
+│   └── config.ts             ← connector configuration interface (incl. customOperations)
 ├── operations/               ← your custom operation functions live here
 │   ├── setSponsors.ts        ← (Entra ID) handles deferred sponsor writes and clears (preSetSponsors, setSponsors)
 │   ├── getSponsors.ts        ← (Entra ID) after: fetches sponsors from Graph
@@ -26,12 +26,23 @@ index.ts                      ← entry point: wires handlers to SDK commands
 
 1. **`index.ts`** registers a single before-handler and a single after-handler for every standard SDK command (account list/read/create/update/disable/enable/unlock, change-password, entitlement list/read).
 
-2. Each handler delegates to the **operation runner** in `operationRunner.ts`, which iterates an **operation map** — a plain object that maps a hook pattern to an array of functions:
+2. Each handler delegates to the **operation runner** in `operationRunner.ts`, which reads the source's **`customOperations`** connector attribute — a map from hook patterns to operation **names** — and resolves those names through the **operation registry** in `customOperations.ts`:
 
     ```typescript
-    // customOperations.ts
-    export const customOperations: CustomOperationMap = {
-        'afterStdAccountCreate.sponsors': [setSponsors], // hookPattern.attributePattern → Array of functions
+    // customOperations.ts — registry of implementations (code)
+    export const operationRegistry = {
+        setSponsors,
+        getSponsors,
+        // ...
+    }
+    ```
+
+    ```json
+    // Source connector attribute — wiring (config)
+    {
+      "customOperations": {
+        "afterStdAccountCreate.sponsors": ["setSponsors"]
+      }
     }
     ```
 
@@ -75,19 +86,137 @@ export const myCustomAttr: AfterOperation<AnyAfterOperationInput> = async (conte
 }
 ```
 
-**2. Register it** in the operation map:
+**2. Register it** in the operation registry:
 
 ```typescript
 // src/customOperations.ts
 import { myCustomAttr } from './operations/myCustomAttr'
 
-export const customOperations: CustomOperationMap = {
-    'afterStdAccountCreate.sponsors': [setSponsors],
-    'afterStdAccountRead.*': [myCustomAttr], // ← new: runs on after read unconditionally
+export const operationRegistry = {
+    // ...existing ops
+    myCustomAttr, // ← new: available by name "myCustomAttr"
 }
 ```
 
-That's it. The framework handles hook matching, iteration, merging the returned object, and logging.
+**3. Wire it** in the source's `customOperations` connector attribute:
+
+```json
+{
+  "customOperations": {
+    "afterStdAccountRead.*": ["myCustomAttr"]
+  }
+}
+```
+
+That's it. The framework handles hook matching, name resolution, iteration, merging the returned object, and logging.
+
+---
+
+### Builtin operations
+
+All registry names below are defined in `src/customOperations.ts`. Reference them by name in the source's `customOperations` map. Unless noted, operations are Entra ID–specific and need `domainName`, `clientID`, and `clientSecret`.
+
+#### Quick reference
+
+| Registry name | Phase | Target | Writes / effect |
+| --- | --- | --- | --- |
+| `preSetSponsors` | before | Account | Strips `sponsors` from input; applies Graph write on update, or defers on create |
+| `setSponsors` | after | Account | Applies deferred sponsor write after create |
+| `getSponsors` | after | Account | Sets `attributes.sponsors` from Graph |
+| `getAppGroups` | after | Account (SPN) | Sets `attributes.spn_app_groups` from app role assignments |
+| `setGuestGalVisibility` | after | Account (Guest) | Sets `showInAddressList: true` in Entra (no ISC attribute change) |
+| `getApplication` | after | Entitlement | Sets `attributes.application` from `displayName` |
+
+---
+
+#### `preSetSponsors` + `setSponsors` — write sponsors
+
+**What for:** Microsoft Graph treats `sponsors` as a navigation property. The base Entra connector cannot set it, so these ops talk to Graph and remove `sponsors` from the payload before the base connector runs (otherwise Graph returns 400).
+
+**How they work together:**
+- **Update (and similar):** `preSetSponsors` writes/clears the sponsor via Graph immediately and strips the attribute from input.
+- **Create:** the user does not exist yet, so `preSetSponsors` caches the pending change; `setSponsors` applies it after the account is created.
+
+**How to use:** define a multi-valued (or single) account attribute named `sponsors` in the source schema, and wire both before and after hooks:
+
+```json
+"beforeStdAccountCreate.sponsors": ["preSetSponsors"],
+"afterStdAccountCreate.sponsors": ["setSponsors"],
+"beforeStdAccountUpdate.sponsors": ["preSetSponsors"],
+"afterStdAccountUpdate.sponsors": ["setSponsors"]
+```
+
+Always pair `preSetSponsors` (before) with `setSponsors` (after) on create. On update, `preSetSponsors` alone is enough for the write; `setSponsors` is still safe to keep for consistency.
+
+---
+
+#### `getSponsors` — read sponsors
+
+**What for:** Populate `attributes.sponsors` on account read/list with the current sponsor UPN(s) from `GET /users/{id}/sponsors`.
+
+**How to use:** do **not** let the base connector `$select` sponsors (that causes 404). Let this operation fetch them. Typical wiring:
+
+```json
+"afterStdAccountList.*": ["getSponsors"],
+"afterStdAccountRead.*": ["getSponsors"]
+```
+
+Or bind to the attribute: `"afterStdAccountRead.sponsors": ["getSponsors"]`.
+
+---
+
+#### `getAppGroups` — SPN group assignments
+
+**What for:** On service principal (enterprise app) accounts, fetch Users and groups assignments via Graph `appRoleAssignedTo` and write unique group object IDs to `attributes.spn_app_groups`. Skips normal user accounts (requires `attributes.spn_app_id`).
+
+**How to use:** ensure SPN accounts expose `spn_app_id` and optionally `objectId`. Add a multi-valued account attribute `spn_app_groups`, then:
+
+```json
+"afterStdAccountList.*": ["getAppGroups"],
+"afterStdAccountRead.*": ["getAppGroups"]
+```
+
+Can be combined with `getSponsors` on the same hook:
+
+```json
+"afterStdAccountList.*": ["getSponsors", "getAppGroups"],
+"afterStdAccountRead.*": ["getSponsors", "getAppGroups"]
+```
+
+---
+
+#### `setGuestGalVisibility` — guest GAL visibility
+
+**What for:** Entra hides B2B guests from the Exchange GAL by default. After create (or update), if `userType === 'Guest'`, PATCHes the user with `showInAddressList: true`. Does not change the ISC account object.
+
+**How to use:** trigger on a create/update after hook when a guest-related attribute is present (example uses `invitedUserDisplayName`):
+
+```json
+"afterStdAccountCreate.invitedUserDisplayName": ["setGuestGalVisibility"]
+```
+
+Or run unconditionally after create/update:
+
+```json
+"afterStdAccountCreate.*": ["setGuestGalVisibility"],
+"afterStdAccountUpdate.*": ["setGuestGalVisibility"]
+```
+
+Requires Graph permission to update the user (`User.ReadWrite.All` or equivalent).
+
+---
+
+#### `getApplication` — parse application from entitlement name
+
+**What for:** Entra `applicationRole` entitlements use display names like `RoleName [on] ApplicationName`. This op splits on ` [on] ` and writes the application portion to `attributes.application` for grouping/filtering in ISC. Only runs when entitlement `type` is `applicationRole`.
+
+**How to use:** add an entitlement attribute `application`, then:
+
+```json
+"afterStdEntitlementList.application": ["getApplication"]
+```
+
+Also useful on read: `"afterStdEntitlementRead.application": ["getApplication"]`.
 
 ---
 
@@ -100,6 +229,7 @@ The only Entra ID-specific files are:
 | `src/entraid-client.ts`                   | Microsoft Graph API wrapper            |
 | `src/operations/setSponsors.ts`           | Handles deferred sponsor writes/clears |
 | `src/operations/getSponsors.ts`           | After-op: fetches current sponsors     |
+| `src/operations/getAppGroups.ts`          | After-op: SPN group assignments        |
 | `src/operations/getApplication.ts`        | After-op: parse app from entitlement   |
 | `src/operations/setGuestGalVisibility.ts` | After-op: enforce guest GAL visibility |
 | `src/model/config.ts`                     | Entra ID connector config interface    |
@@ -109,39 +239,14 @@ Everything else (`index.ts`, `operationRunner.ts`, `utils.ts`, `model/operation.
 1. Replace `entraid-client.ts` with a client for your target API
 2. Update `config.ts` to match your connector's configuration schema
 3. Write new operations in `src/operations/`
-4. Wire them into the hook patterns in `customOperations.ts`
-
----
-
-### Included Entra ID operations
-
-#### Sponsors (account attribute)
-
-| Phase  | Operation             | What it does                                                                                                                                                                                                                    |
-| ------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Before | `preSetSponsors`      | Intercepts sponsor changes in the input. For **update** commands, applies them immediately via Graph API. For **create** commands, defers the write (user doesn't exist yet) and caches the pending change for the after phase. Located in `setSponsors.ts`. |
-| After  | `setSponsors`         | If a deferred sponsor change was cached (create flow), applies it now that the user exists. Located in `setSponsors.ts`.                                                                                                          |
-| After  | `getSponsors`         | Fetches current sponsors from `GET /users/{id}/sponsors` and returns UPN(s). Runs during reads and lists.                                                                                                                       |
-
-Sponsors are a **navigation property** in Microsoft Graph (not a direct attribute), so the base connector cannot read/write them natively. This combination of operations handles them transparently.
-
-#### Guest GAL Visibility (account attribute)
-
-| Phase | Operation               | What it does                                                                                                                                                                                       |
-| ----- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| After | `setGuestGalVisibility` | For `Guest` users, enforces their visibility in the Exchange Global Address List by calling the Graph API to set `showInAddressList: true` upon account creation or update. Skips non-Guest users. |
-
-#### Application (entitlement attribute)
-
-| Phase | Operation        | What it does                                                                                                 |
-| ----- | ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| After | `getApplication` | For `applicationRole` entitlements, splits `displayName` on `[on]` and returns the application name portion. |
+4. Register them in `operationRegistry` (`customOperations.ts`)
+5. Wire hook patterns via the source's `customOperations` connector attribute
 
 ---
 
 ### Configuration
 
-The customizer reuses the same configuration as the base connector. The key fields used by the included Entra ID operations are:
+The customizer reuses the same configuration as the base connector, plus an optional **`customOperations`** attribute that wires hook patterns to registry names.
 
 | Field                       | Used for                                                |
 | --------------------------- | ------------------------------------------------------- |
@@ -149,8 +254,26 @@ The customizer reuses the same configuration as the base connector. The key fiel
 | `clientID`                  | Application (client) ID                                 |
 | `clientSecret`              | Application secret                                      |
 | `spConnDebugLoggingEnabled` | Toggles debug-level logging                             |
+| `customOperations`          | Hook pattern → operation name map (object or JSON string) |
 
-No additional configuration is required beyond what the base connector provides.
+Example Entra ID wiring (add as a source connector attribute):
+
+```json
+{
+  "customOperations": {
+    "beforeStdAccountCreate.sponsors": ["preSetSponsors"],
+    "afterStdAccountCreate.sponsors": ["setSponsors"],
+    "beforeStdAccountUpdate.sponsors": ["preSetSponsors"],
+    "afterStdAccountUpdate.sponsors": ["setSponsors"],
+    "afterStdAccountCreate.invitedUserDisplayName": ["setGuestGalVisibility"],
+    "afterStdAccountList.*": ["getSponsors", "getAppGroups"],
+    "afterStdAccountRead.*": ["getSponsors", "getAppGroups"],
+    "afterStdEntitlementList.application": ["getApplication"]
+  }
+}
+```
+
+ISC connector attributes are often strings, so `customOperations` may also be stored as a JSON string — the runner parses either form. If the field is missing or empty, no custom operations run. Unknown operation names are skipped with a warning log.
 
 ---
 
@@ -169,7 +292,7 @@ npm run pack-zip      # package for deployment (spcx package)
 1. `npm run build` (or `npm run prepack-zip`)
 2. `npm run pack-zip` → creates a deployable ZIP
 3. Upload to ISC as a SaaS connector customizer
-4. Link to your source and enable the relevant before/after operations
+4. Link to your source, set the `customOperations` connector attribute, and enable the relevant before/after operations
 
 ---
 
@@ -188,6 +311,8 @@ Controlled by `spConnDebugLoggingEnabled`:
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Auth errors from Graph                          | Check `clientID`, `clientSecret`, `domainName` and required Graph permissions (`User.Read.All`, `Directory.Read.All`)                                                                                      |
 | Missing attributes on output                    | Verify the incoming object contains the fields your operations use (`objectId`, `userPrincipalName`, `uuid`, `type`). Add null checks as needed.                                                           |
+| Operations never run                            | Ensure the source has a `customOperations` attribute mapping hook patterns to registry names. Missing/empty config means no ops run.                                                                       |
+| `Unknown custom operation` warning              | The name in config is not registered in `operationRegistry` (`customOperations.ts`). Check spelling or add the implementation.                                                                            |
 | 404 on aggregation with `sponsors` in `$select` | `sponsors` is a Graph navigation property (requires `$expand`, not `$select`). Configure the attribute in ISC so the base connector does not fetch it — the customizer handles it via a separate API call. |
 | Graph throttling / failures                     | Check logs for `Error fetching ...` messages. Consider adding retry/backoff in the client methods.                                                                                                         |
 

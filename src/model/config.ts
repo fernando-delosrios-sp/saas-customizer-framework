@@ -88,6 +88,21 @@ export interface Config {
     spConnEnableStatefulCommands?: boolean
     spConnectorInstanceId?: string
     spConnectorSpecId?: string
+
+    /**
+     * Hook-pattern → operation-name map. Keys use `<hookPattern>.<attributePattern>`
+     * (e.g. `afterStdAccountRead.*`). Values are registry names or arrays of names.
+     * May be a JSON string when stored as an ISC connector attribute.
+     */
+    customOperations?: CustomOperationsConfig | string
+}
+
+/**
+ * Source-config shape for custom operations wiring.
+ * Values are operation registry names (see `operationRegistry` in customOperations.ts).
+ */
+export type CustomOperationsConfig = {
+    [pattern: string]: string | string[]
 }
 
 // Group creation configuration

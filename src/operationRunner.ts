@@ -10,6 +10,9 @@
  *    running each registered operation against every output object and writing
  *    the returned value back to the mapped attribute.
  *
+ * Hook wiring comes from the source's `customOperations` config attribute.
+ * Values are operation registry names resolved via `operationRegistry`.
+ *
  * Map key conventions:
  *   - Keys are plain attribute names (e.g. 'sponsors'). The runners auto-prefix
  *     'attributes.' when reading/writing the object. The legacy 'attributes.'
@@ -18,10 +21,11 @@
  *
  * These utilities are connector-agnostic. Plug in any OperationMap and they work.
  */
-import { Context, readConfig } from '@sailpoint/connector-sdk'
+import { Context, readConfig, logger as sdkLogger } from '@sailpoint/connector-sdk'
 import { AnyBeforeOperationInput, AnyAfterOperationInput, CustomOperationMap } from './model/operation'
-import { Config } from './model/config'
-import { getLogger, setAttribute, setAttributeImmutable } from './utils'
+import { Config, CustomOperationsConfig } from './model/config'
+import { operationRegistry } from './customOperations'
+import { getLogger } from './utils'
 
 // Helper function to check if a hook matches a pattern
 function matchesPattern(hook: string, pattern: string): boolean {
@@ -31,7 +35,54 @@ function matchesPattern(hook: string, pattern: string): boolean {
 }
 
 /**
- * Creates a before-operation handler from an operation map.
+ * Parses `config.customOperations` (object or JSON string) and resolves
+ * operation names through `operationRegistry` into a callable map.
+ * Unknown names are skipped with a warning. Missing/empty config → empty map.
+ */
+function resolveOperationsFromConfig(config: Config): CustomOperationMap {
+    let raw: CustomOperationsConfig | undefined
+
+    if (typeof config.customOperations === 'string') {
+        const trimmed = config.customOperations.trim()
+        if (!trimmed) return {}
+        try {
+            raw = JSON.parse(trimmed) as CustomOperationsConfig
+        } catch (err) {
+            sdkLogger.warn(`Failed to parse customOperations config as JSON: ${err}`)
+            return {}
+        }
+    } else {
+        raw = config.customOperations
+    }
+
+    if (!raw || typeof raw !== 'object') return {}
+
+    const resolved: CustomOperationMap = {}
+
+    for (const [pattern, names] of Object.entries(raw)) {
+        const nameList = Array.isArray(names) ? names : [names]
+        const ops = []
+
+        for (const name of nameList) {
+            if (typeof name !== 'string' || !name) continue
+            const op = operationRegistry[name]
+            if (!op) {
+                sdkLogger.warn(`Unknown custom operation "${name}" for pattern "${pattern}" — skipping`)
+                continue
+            }
+            ops.push(op)
+        }
+
+        if (ops.length > 0) {
+            resolved[pattern] = ops
+        }
+    }
+
+    return resolved
+}
+
+/**
+ * Creates a before-operation handler from the source's customOperations config.
  *
  * For each entry in the map the handler checks whether the input contains the
  * relevant attribute (in `attributes`, `primaryData`, or `changes`). If it does,
@@ -43,10 +94,11 @@ function matchesPattern(hook: string, pattern: string): boolean {
  * Keys are plain attribute names (e.g. 'sponsors'). The legacy 'attributes.'
  * prefix is still accepted but no longer required.
  */
-export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName: string, operations: CustomOperationMap) => {
+export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName: string) => {
     return async (context: Context, input: T): Promise<T> => {
         const config: Config = await readConfig()
         const logger = getLogger(config.spConnDebugLoggingEnabled)
+        const operations = resolveOperationsFromConfig(config)
 
         for (const [pattern, operation] of Object.entries(operations)) {
             let hookPattern = '*'
@@ -99,7 +151,7 @@ export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName:
 }
 
 /**
- * Creates an after-operation handler from an operation map.
+ * Creates an after-operation handler from the source's customOperations config.
  *
  * For each entry in the map the handler iterates over every output object
  * (supports both single objects and arrays), calls the operation, and writes
@@ -113,10 +165,11 @@ export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName:
  * 'attributes.' automatically. The legacy 'attributes.' prefix is still
  * accepted but no longer required.
  */
-export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: string, operations: CustomOperationMap) => {
+export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: string) => {
     return async (context: Context, output: T): Promise<T> => {
         const config: Config = await readConfig()
         const logger = getLogger(config.spConnDebugLoggingEnabled)
+        const operations = resolveOperationsFromConfig(config)
 
         // Normalise to array so the same logic works for list and single-object commands
         const isArray = Array.isArray(output)

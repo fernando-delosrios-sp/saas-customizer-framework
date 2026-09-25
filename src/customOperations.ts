@@ -1,28 +1,27 @@
-import { CustomOperationMap } from './model/operation'
-
 import { setSponsors, preSetSponsors } from './operations/setSponsors'
 import { getSponsors } from './operations/getSponsors'
+import { getAppGroups } from './operations/getAppGroups'
 import { getApplication } from './operations/getApplication'
 import { setGuestGalVisibility } from './operations/setGuestGalVisibility'
+import { BeforeOperation, AfterOperation } from './model/operation'
 
 /**
- * Custom Operations Map
+ * Operation Registry
  *
- * Maps hook patterns to operation functions. The key is in the format `hookPattern.attributePattern`.
- * Examples:
- * - `*.*` - Runs on all hooks for all attributes.
- * - `*.sponsors` - Runs on all hooks for the 'sponsors' attribute.
- * - `before*.sponsors` - Runs on all 'before' hooks for the 'sponsors' attribute.
- * - `beforeStdAccountList.*` - Runs on the beforeStdAccountList hook for all attributes.
- * - `afterStdAccountRead.sponsors` - Runs on the afterStdAccountRead hook for the 'sponsors' attribute.
+ * Named catalog of available operation implementations. Source configuration
+ * references these by name (e.g. `"preSetSponsors"`) in the `customOperations`
+ * connector attribute — the runner resolves names to functions at runtime.
+ *
+ * To add a new operation:
+ *   1. Implement it under `src/operations/`
+ *   2. Register it here under a stable string key
+ *   3. Wire the key into the source's `customOperations` config map
  */
-export const customOperations: CustomOperationMap = {
-    'beforeStdAccountCreate.sponsors': [preSetSponsors],
-    'afterStdAccountCreate.sponsors': [setSponsors],
-    'beforeStdAccountUpdate.sponsors': [preSetSponsors],
-    'afterStdAccountUpdate.sponsors': [setSponsors],
-    'afterStdAccountCreate.invitedUserDisplayName': [setGuestGalVisibility],
-    'afterStdAccountList.*': [getSponsors],
-    'afterStdAccountRead.*': [getSponsors],
-    'afterStdEntitlementList.application': [getApplication],
+export const operationRegistry: Record<string, BeforeOperation<any> | AfterOperation<any>> = {
+    preSetSponsors,
+    setSponsors,
+    getSponsors,
+    getAppGroups,
+    getApplication,
+    setGuestGalVisibility,
 }
