@@ -1,6 +1,6 @@
 ## SaaS Customizer Framework
 
-A framework for building SailPoint SaaS Connector Customizers that extend any [supported SaaS connector](https://developer.sailpoint.com/docs/connectivity/saas-connectivity/customizers) with custom account and entitlement attributes. The included implementation targets **Microsoft Entra ID** (sponsors & application parsing), but the framework is connector-agnostic — swap the API client and operations for any connector.
+A framework for building SailPoint SaaS Connector Customizers that extend any [supported SaaS connector](https://developer.sailpoint.com/docs/connectivity/saas-connectivity/customizers) with custom account and entitlement attributes. The included operations all target **Microsoft Entra ID** (sponsors, service principal group assignments, guest GAL visibility, and entitlement application parsing), but the framework is connector-agnostic — swap the API client and operations for any connector.
 
 ---
 
@@ -114,22 +114,28 @@ That's it. The framework handles hook matching, name resolution, iteration, merg
 
 ### Builtin operations
 
-All registry names below are defined in `src/customOperations.ts`. Reference them by name in the source's `customOperations` map. Unless noted, operations are Entra ID–specific and need `domainName`, `clientID`, and `clientSecret`.
+All registry names below are defined in `src/customOperations.ts`. Reference them by name in the source's `customOperations` map.
 
 #### Quick reference
 
-| Registry name | Phase | Target | Writes / effect |
-| --- | --- | --- | --- |
-| `preSetSponsors` | before | Account | Strips `sponsors` from input; applies Graph write on update, or defers on create |
-| `setSponsors` | after | Account | Applies deferred sponsor write after create |
-| `getSponsors` | after | Account | Sets `attributes.sponsors` from Graph |
-| `getAppGroups` | after | Account (SPN) | Sets `attributes.spn_app_groups` from app role assignments |
-| `setGuestGalVisibility` | after | Account (Guest) | Sets `showInAddressList: true` in Entra (no ISC attribute change) |
-| `getApplication` | after | Entitlement | Sets `attributes.application` from `displayName` |
+Every builtin operation was written for the **Microsoft Entra ID** connector (`connectorId: Microsoft-Entra`) and, except for `getApplication`, calls Microsoft Graph using the source's `domainName`, `clientID`, and `clientSecret`. They are worked examples of the framework rather than connector-agnostic utilities — on any other source they will either skip or fail.
+
+| Registry name | Connector | Phase | Applies to | Reads from the object | Graph call | Effect |
+| --- | --- | --- | --- | --- | --- | --- |
+| `preSetSponsors` | Microsoft Entra ID (`Microsoft-Entra`) | before | User accounts, on create/update | `sponsors` (in `attributes` or `changes`), plus `identity` / `key.simple.id` / `attributes.objectId` | `POST /users/{id}/sponsors/$ref`, `DELETE /users/{id}/sponsors/{sponsorId}/$ref` | Writes or clears the sponsor immediately on update; on create caches it for `setSponsors`. Always strips `sponsors` from the payload so the base connector cannot 400 on it. |
+| `setSponsors` | Microsoft Entra ID (`Microsoft-Entra`) | after | User accounts, on create | `identity`, falling back to the id cached by `preSetSponsors` | same as above | Applies the sponsor write that `preSetSponsors` deferred. Writes no ISC attribute. |
+| `getSponsors` | Microsoft Entra ID (`Microsoft-Entra`) | after | User accounts, on list/read | `identity` / `id` / `uuid` / `attributes.objectId` / `attributes.userPrincipalName` | `GET /users/{id}/sponsors` | Sets `attributes.sponsors` to the sponsor UPN, or an array of UPNs when there is more than one. |
+| `getAppGroups` | Microsoft Entra ID (`Microsoft-Entra`) | after | Service principal accounts, on list/read — needs `manageAzureServicePrincipalAsAccount` on the source | `attributes.spn_appId` (gate) and `attributes.objectId` (composite `{spObjectId}:{appObjectId}` native id) | `GET /servicePrincipals/{id}/appRoleAssignedTo`, following `@odata.nextLink` | Sets the multi-valued `attributes.spn_app_groups` to the unique `principalId`s of `Group` assignments. Users and other principal types are ignored. |
+| `setGuestGalVisibility` | Microsoft Entra ID (`Microsoft-Entra`) | after | B2B guest accounts, on create/update | `identity` and `attributes.userType` (must be `Guest`) | `PATCH /users/{id}` | Sets `showInAddressList: true` in Entra. Changes nothing on the ISC account; failures are logged, not thrown. |
+| `getApplication` | Microsoft Entra ID (`Microsoft-Entra`) | after | Entitlements of type `applicationRole`, on list/read | `type` and `attributes.displayName` | none — pure string parsing | Sets `attributes.application` to the part of `displayName` after ` [on] `. |
+
+Graph permissions differ per operation: reading sponsors needs `User.Read.All` (or `Directory.Read.All`), writing them needs `User.ReadWrite.All`, `setGuestGalVisibility` needs `User.ReadWrite.All`, and `getAppGroups` needs `Application.Read.All` (or `Directory.Read.All`).
 
 ---
 
 #### `preSetSponsors` + `setSponsors` — write sponsors
+
+**Connector:** Microsoft Entra ID (`Microsoft-Entra`)
 
 **What for:** Microsoft Graph treats `sponsors` as a navigation property. The base Entra connector cannot set it, so these ops talk to Graph and remove `sponsors` from the payload before the base connector runs (otherwise Graph returns 400).
 
@@ -152,6 +158,8 @@ Always pair `preSetSponsors` (before) with `setSponsors` (after) on create. On u
 
 #### `getSponsors` — read sponsors
 
+**Connector:** Microsoft Entra ID (`Microsoft-Entra`)
+
 **What for:** Populate `attributes.sponsors` on account read/list with the current sponsor UPN(s) from `GET /users/{id}/sponsors`.
 
 **How to use:** do **not** let the base connector `$select` sponsors (that causes 404). Let this operation fetch them. Typical wiring:
@@ -166,6 +174,8 @@ Or bind to the attribute: `"afterStdAccountRead.sponsors": ["getSponsors"]`.
 ---
 
 #### `getAppGroups` — SPN group assignments
+
+**Connector:** Microsoft Entra ID (`Microsoft-Entra`)
 
 **What for:** On service principal (enterprise app) accounts, fetch Users and groups assignments via Graph `appRoleAssignedTo` and write unique group object IDs to `attributes.spn_app_groups`. Skips normal user accounts (requires `attributes.spn_appId`).
 
@@ -187,6 +197,8 @@ Can be combined with `getSponsors` on the same hook:
 
 #### `setGuestGalVisibility` — guest GAL visibility
 
+**Connector:** Microsoft Entra ID (`Microsoft-Entra`)
+
 **What for:** Entra hides B2B guests from the Exchange GAL by default. After create (or update), if `userType === 'Guest'`, PATCHes the user with `showInAddressList: true`. Does not change the ISC account object.
 
 **How to use:** trigger on a create/update after hook when a guest-related attribute is present (example uses `invitedUserDisplayName`):
@@ -207,6 +219,8 @@ Requires Graph permission to update the user (`User.ReadWrite.All` or equivalent
 ---
 
 #### `getApplication` — parse application from entitlement name
+
+**Connector:** Microsoft Entra ID (`Microsoft-Entra`)
 
 **What for:** Entra `applicationRole` entitlements use display names like `RoleName [on] ApplicationName`. This op splits on ` [on] ` and writes the application portion to `attributes.application` for grouping/filtering in ISC. Only runs when entitlement `type` is `applicationRole`.
 
