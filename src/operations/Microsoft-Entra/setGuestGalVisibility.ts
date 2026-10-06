@@ -10,10 +10,10 @@
  * Identity Security Cloud object.
  */
 import { Context, readConfig } from '@sailpoint/connector-sdk'
-import { EntraIdClient } from '../entraid-client'
-import { AfterOperation, AccountAfterOperationInput } from '../model/operation'
-import { Config } from '../model/config'
-import { getLogger } from '../utils'
+import { EntraIdClient } from '../../entraid-client'
+import { AfterOperation, AccountAfterOperationInput } from '../../model/operation'
+import { Config } from '../../model/config'
+import { getLogger } from '../../utils'
 export const setGuestGalVisibility: AfterOperation<AccountAfterOperationInput> = async (context, output) => {
     const config: Config = await readConfig()
     const logger = getLogger(config.spConnDebugLoggingEnabled)

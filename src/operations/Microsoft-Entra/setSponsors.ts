@@ -1,8 +1,8 @@
 import { AttributeChangeOp, Context, readConfig } from '@sailpoint/connector-sdk'
-import { EntraIdClient } from '../entraid-client'
-import { BeforeOperation, AccountBeforeOperationInput, AfterOperation, AccountAfterOperationInput } from '../model/operation'
-import { Config } from '../model/config'
-import { getLogger } from '../utils'
+import { EntraIdClient } from '../../entraid-client'
+import { BeforeOperation, AccountBeforeOperationInput, AfterOperation, AccountAfterOperationInput } from '../../model/operation'
+import { Config } from '../../model/config'
+import { getLogger } from '../../utils'
 
 // ---------------------------------------------------------------------------
 // Per-invocation cache (before → after data passing)

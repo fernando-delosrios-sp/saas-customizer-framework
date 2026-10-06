@@ -9,10 +9,10 @@
  * Only runs when `attributes.spn_appId` is present (SPN accounts).
  */
 import { readConfig } from '@sailpoint/connector-sdk'
-import { EntraIdClient } from '../entraid-client'
-import { AfterOperation, AccountAfterOperationInput } from '../model/operation'
-import { Config } from '../model/config'
-import { getLogger } from '../utils'
+import { EntraIdClient } from '../../entraid-client'
+import { AfterOperation, AccountAfterOperationInput } from '../../model/operation'
+import { Config } from '../../model/config'
+import { getLogger } from '../../utils'
 
 export const getAppGroups: AfterOperation<AccountAfterOperationInput> = async (context, output) => {
     const config: Config = await readConfig()

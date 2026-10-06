@@ -1,8 +1,8 @@
-import { setSponsors, preSetSponsors } from './operations/setSponsors'
-import { getSponsors } from './operations/getSponsors'
-import { getAppGroups } from './operations/getAppGroups'
-import { getApplication } from './operations/getApplication'
-import { setGuestGalVisibility } from './operations/setGuestGalVisibility'
+import { setSponsors, preSetSponsors } from './operations/Microsoft-Entra/setSponsors'
+import { getSponsors } from './operations/Microsoft-Entra/getSponsors'
+import { getAppGroups } from './operations/Microsoft-Entra/getAppGroups'
+import { getApplication } from './operations/Microsoft-Entra/getApplication'
+import { setGuestGalVisibility } from './operations/Microsoft-Entra/setGuestGalVisibility'
 import { BeforeOperation, AfterOperation } from './model/operation'
 
 /**
@@ -13,7 +13,7 @@ import { BeforeOperation, AfterOperation } from './model/operation'
  * connector attribute — the runner resolves names to functions at runtime.
  *
  * To add a new operation:
- *   1. Implement it under `src/operations/`
+ *   1. Implement it under `src/operations/<connectorType>/` (e.g. `src/operations/Microsoft-Entra/`)
  *   2. Register it here under a stable string key
  *   3. Wire the key into the source's `customOperations` config map
  */
