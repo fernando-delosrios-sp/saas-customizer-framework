@@ -12,9 +12,9 @@
  * Only runs for entitlement types listed in APPLICATION_ENTITLEMENT_TYPES.
  */
 import { Context, readConfig } from '@sailpoint/connector-sdk'
-import { AfterOperation, EntitlementAfterOperationInput } from '../model/operation'
-import { Config } from '../model/config'
-import { getLogger } from '../utils'
+import { AfterOperation, EntitlementAfterOperationInput } from '../../model/operation'
+import { Config } from '../../model/config'
+import { getLogger } from '../../utils'
 
 /** Entitlement types whose displayName contains the "[on] Application" pattern. */
 const APPLICATION_ENTITLEMENT_TYPES = ['applicationRole']

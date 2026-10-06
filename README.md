@@ -14,11 +14,13 @@ index.ts                      ← entry point: wires handlers to SDK commands
 ├── model/
 │   ├── operation.ts          ← Operation / OperationMap type definitions
 │   └── config.ts             ← connector configuration interface (incl. customOperations)
-├── operations/               ← your custom operation functions live here
-│   ├── setSponsors.ts        ← (Entra ID) handles deferred sponsor writes and clears (preSetSponsors, setSponsors)
-│   ├── getSponsors.ts        ← (Entra ID) after: fetches sponsors from Graph
-│   ├── setGuestGalVisibility.ts ← (Entra ID) after: enforce guest GAL visibility
-│   └── getApplication.ts     ← (Entra ID) after: parse application from entitlement name
+├── operations/               ← custom operations, grouped by connector type
+│   └── Microsoft-Entra/      ← operations for connectorId Microsoft-Entra
+│       ├── setSponsors.ts           ← handles deferred sponsor writes and clears (preSetSponsors, setSponsors)
+│       ├── getSponsors.ts           ← after: fetches sponsors from Graph
+│       ├── getAppGroups.ts          ← after: SPN group assignments
+│       ├── setGuestGalVisibility.ts ← after: enforce guest GAL visibility
+│       └── getApplication.ts        ← after: parse application from entitlement name
 └── entraid-client.ts         ← (Entra ID) Microsoft Graph API wrapper
 ```
 
@@ -59,14 +61,14 @@ index.ts                      ← entry point: wires handlers to SDK commands
 
 ### Quick start — adding a custom attribute
 
-**1. Write your operation** in `src/operations/`:
+**1. Write your operation** under `src/operations/<connectorType>/` (the folder name is the ISC connector id, e.g. `Microsoft-Entra`):
 
 ```typescript
-// src/operations/myCustomAttr.ts
+// src/operations/Microsoft-Entra/myCustomAttr.ts
 import { Context, readConfig } from '@sailpoint/connector-sdk'
-import { AnyAfterOperationInput, AfterOperation } from '../model/operation'
-import { Config } from '../model/config'
-import { getLogger } from '../utils'
+import { AnyAfterOperationInput, AfterOperation } from '../../model/operation'
+import { Config } from '../../model/config'
+import { getLogger } from '../../utils'
 
 export const myCustomAttr: AfterOperation<AnyAfterOperationInput> = async (context: Context, output: AnyAfterOperationInput) => {
     const config: Config = await readConfig()
@@ -90,7 +92,7 @@ export const myCustomAttr: AfterOperation<AnyAfterOperationInput> = async (conte
 
 ```typescript
 // src/customOperations.ts
-import { myCustomAttr } from './operations/myCustomAttr'
+import { myCustomAttr } from './operations/Microsoft-Entra/myCustomAttr'
 
 export const operationRegistry = {
     // ...existing ops
@@ -238,21 +240,21 @@ Also useful on read: `"afterStdEntitlementRead.application": ["getApplication"]`
 
 The only Entra ID-specific files are:
 
-| File                                      | Purpose                                |
-| ----------------------------------------- | -------------------------------------- |
-| `src/entraid-client.ts`                   | Microsoft Graph API wrapper            |
-| `src/operations/setSponsors.ts`           | Handles deferred sponsor writes/clears |
-| `src/operations/getSponsors.ts`           | After-op: fetches current sponsors     |
-| `src/operations/getAppGroups.ts`          | After-op: SPN group assignments        |
-| `src/operations/getApplication.ts`        | After-op: parse app from entitlement   |
-| `src/operations/setGuestGalVisibility.ts` | After-op: enforce guest GAL visibility |
-| `src/model/config.ts`                     | Entra ID connector config interface    |
+| File                                                  | Purpose                                |
+| ----------------------------------------------------- | -------------------------------------- |
+| `src/entraid-client.ts`                               | Microsoft Graph API wrapper            |
+| `src/operations/Microsoft-Entra/setSponsors.ts`       | Handles deferred sponsor writes/clears |
+| `src/operations/Microsoft-Entra/getSponsors.ts`       | After-op: fetches current sponsors     |
+| `src/operations/Microsoft-Entra/getAppGroups.ts`      | After-op: SPN group assignments        |
+| `src/operations/Microsoft-Entra/getApplication.ts`    | After-op: parse app from entitlement   |
+| `src/operations/Microsoft-Entra/setGuestGalVisibility.ts` | After-op: enforce guest GAL visibility |
+| `src/model/config.ts`                                 | Entra ID connector config interface    |
 
 Everything else (`index.ts`, `operationRunner.ts`, `utils.ts`, `model/operation.ts`, `customOperations.ts`) is generic framework code. To target a different connector:
 
 1. Replace `entraid-client.ts` with a client for your target API
 2. Update `config.ts` to match your connector's configuration schema
-3. Write new operations in `src/operations/`
+3. Write new operations in `src/operations/<connectorType>/` (use the ISC connector id as the folder name)
 4. Register them in `operationRegistry` (`customOperations.ts`)
 5. Wire hook patterns via the source's `customOperations` connector attribute
 
