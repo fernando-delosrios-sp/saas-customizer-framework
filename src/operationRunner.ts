@@ -21,7 +21,7 @@
  *
  * These utilities are connector-agnostic. Plug in any OperationMap and they work.
  */
-import { Context, readConfig, logger as sdkLogger } from '@sailpoint/connector-sdk'
+import { ConnectorCustomizer, Context, readConfig, logger as sdkLogger } from '@sailpoint/connector-sdk'
 import { AnyBeforeOperationInput, AnyAfterOperationInput, CustomOperationMap } from './model/operation'
 import { Config, CustomOperationsConfig } from './model/config'
 import { operationRegistry } from './customOperations'
@@ -30,8 +30,82 @@ import { getLogger } from './utils'
 // Helper function to check if a hook matches a pattern
 function matchesPattern(hook: string, pattern: string): boolean {
     if (pattern === '*') return true
-    const regex = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`)
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+    const regex = new RegExp(`^${escaped}$`)
     return regex.test(hook)
+}
+
+/**
+ * Splits a customOperations key into `{ hookPattern, attrPattern }`.
+ *
+ * Keys follow `<op>[.<attributePattern>]` for standard hooks (where `<op>` already
+ * encodes before/after, e.g. `beforeStdAccountCreate`) or
+ * `<op>:<before|after|*>[.<attributePattern>]` for Web Services endpoint hooks.
+ *
+ * Omitting `.<attributePattern>` is equivalent to `.*` (runs unconditionally
+ * regardless of input attributes). Specifying `.a` scopes execution to when
+ * attribute `a` is present.
+ *
+ * Examples:
+ * - `'beforeStdTestConnection'`          → `{ hookPattern: 'beforeStdTestConnection', attrPattern: '*' }`
+ * - `'beforeStdAccountCreate.sponsors'`  → `{ hookPattern: 'beforeStdAccountCreate', attrPattern: 'sponsors' }`
+ * - `'Test Connection:before'`           → `{ hookPattern: 'Test Connection:before', attrPattern: '*' }`
+ * - `'Test Connection:*'`                → `{ hookPattern: 'Test Connection:*', attrPattern: '*' }`
+ * - `'Update Account:before.sponsors'`   → `{ hookPattern: 'Update Account:before', attrPattern: 'sponsors' }`
+ */
+export function parsePattern(pattern: string): { hookPattern: string; attrPattern: string } {
+    const wsMatch = pattern.match(/^(.+:(?:before|after|\*))(?:\.(.+))?$/)
+    if (wsMatch) {
+        return {
+            hookPattern: wsMatch[1],
+            attrPattern: wsMatch[2] ?? '*',
+        }
+    }
+
+    if (pattern.includes('.')) {
+        const firstDotIdx = pattern.indexOf('.')
+        return {
+            hookPattern: pattern.substring(0, firstDotIdx),
+            attrPattern: pattern.substring(firstDotIdx + 1),
+        }
+    }
+
+    return {
+        hookPattern: pattern,
+        attrPattern: '*',
+    }
+}
+
+/**
+ * Checks whether `attrName` (or `attrPattern`) is present in a before-operation input
+ * across standard SDK payloads (`attributes`, `primaryData`, `changes`) and Web Services
+ * endpoint payloads (`requestEndPoint.body.jsonBody`, `provisioningPlan`, or top-level keys).
+ */
+function hasInputAttribute(inputAny: any, attrName: string, attrPattern: string): boolean {
+    if (!inputAny || typeof inputAny !== 'object') return false
+    if (
+        inputAny[attrName] != null ||
+        inputAny[attrPattern] != null ||
+        inputAny.attributes?.[attrName] != null ||
+        inputAny.attributes?.[attrPattern] != null ||
+        inputAny.primaryData?.[attrName] != null ||
+        inputAny.changes?.some((c: any) => c.attribute === attrName || c.attribute === attrPattern)
+    ) {
+        return true
+    }
+    const jsonBody = inputAny.requestEndPoint?.body?.jsonBody
+    if (jsonBody && typeof jsonBody === 'object' && (jsonBody[attrName] != null || jsonBody[attrPattern] != null)) {
+        return true
+    }
+    const accountRequests = inputAny.provisioningPlan?.accountRequests
+    if (Array.isArray(accountRequests)) {
+        return accountRequests.some((ar: any) =>
+            ar?.attributeRequests?.some(
+                (req: any) => req?.name === attrName || req?.name === attrPattern || req?.attributeName === attrName
+            )
+        )
+    }
+    return false
 }
 
 /**
@@ -101,19 +175,13 @@ export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName:
         const operations = resolveOperationsFromConfig(config)
 
         for (const [pattern, operation] of Object.entries(operations)) {
-            let hookPattern = '*'
-            let attrPattern = pattern
-            if (pattern.includes('.')) {
-                const firstDotIdx = pattern.indexOf('.')
-                hookPattern = pattern.substring(0, firstDotIdx)
-                attrPattern = pattern.substring(firstDotIdx + 1)
-            }
+            const { hookPattern, attrPattern } = parsePattern(pattern)
 
             if (!matchesPattern(hookName, hookPattern)) continue
 
             // '*' or 'null' key → always run (unconditional operation)
             if (attrPattern === '*' || attrPattern === 'null') {
-                logger.debug(`${context.commandType} - Running before operation (always)`)
+                logger.debug(`${context.commandType ?? hookName} - Running before operation (always)`)
                 const ops = Array.isArray(operation) ? operation : [operation]
                 for (const op of ops) {
                     const functionInput = await (op as any)(context, input)
@@ -128,15 +196,8 @@ export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName:
             const attrName = attrPattern.startsWith('attributes.') ? attrPattern.slice('attributes.'.length) : attrPattern
 
             // Check if the attribute is present in any of the possible input locations
-            const inputAny = input as any
-            const hasAttribute =
-                inputAny.attributes?.[attrName] != null ||
-                inputAny.attributes?.[attrPattern] != null ||
-                inputAny.primaryData?.[attrName] != null ||
-                inputAny.changes?.some((c: any) => c.attribute === attrName || c.attribute === attrPattern)
-
-            if (hasAttribute) {
-                logger.debug(`${context.commandType} - Running before operation for attribute ${attrName}`)
+            if (hasInputAttribute(input as any, attrName, attrPattern)) {
+                logger.debug(`${context.commandType ?? hookName} - Running before operation for attribute ${attrName}`)
                 const ops = Array.isArray(operation) ? operation : [operation]
                 for (const op of ops) {
                     const functionInput = await (op as any)(context, input)
@@ -177,20 +238,14 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
         let result: any[] = items
 
         for (const [pattern, operation] of Object.entries(operations)) {
-            let hookPattern = '*'
-            let attrPattern = pattern
-            if (pattern.includes('.')) {
-                const firstDotIdx = pattern.indexOf('.')
-                hookPattern = pattern.substring(0, firstDotIdx)
-                attrPattern = pattern.substring(firstDotIdx + 1)
-            }
+            const { hookPattern, attrPattern } = parsePattern(pattern)
 
             if (!matchesPattern(hookName, hookPattern)) continue
 
             // '*' or 'null' key → always run; return value replaces the object
             if (attrPattern === '*' || attrPattern === 'null') {
                 for (let i = 0; i < items.length; i++) {
-                    logger.debug(`${context.commandType} - Running after operation (always)`)
+                    logger.debug(`${context.commandType ?? hookName} - Running after operation (always)`)
                     const ops = Array.isArray(operation) ? operation : [operation]
                     let currentItem = result[i]
                     let mutated = false
@@ -219,12 +274,12 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
                 // (e.g. update, disable, enable, unlock, changePassword responses).
                 if (attributePath.startsWith('attributes.') && !item?.attributes) {
                     logger.debug(
-                        `${context.commandType} - Skipping after operation for ${attrPattern}: output has no attributes`
+                        `${context.commandType ?? hookName} - Skipping after operation for ${attrPattern}: output has no attributes`
                     )
                     continue
                 }
 
-                logger.debug(`${context.commandType} - Running after operation for attribute ${attrPattern}`)
+                logger.debug(`${context.commandType ?? hookName} - Running after operation for attribute ${attrPattern}`)
                 const ops = Array.isArray(operation) ? operation : [operation]
                 let currentItem = item
                 let mutated = false
@@ -245,4 +300,94 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
 
         return (isArray ? result : result[0]) as T
     }
+}
+
+/**
+ * Registers all standard SDK hooks (`beforeStd*`, `afterStd*`) and Web Services
+ * endpoint customizers (`<op>:before`, `<op>:after`, `<op>:*`) on a `ConnectorCustomizer` instance.
+ */
+export const registerOperations = async (customizer: ConnectorCustomizer): Promise<ConnectorCustomizer> => {
+    // 1. Automatically hook all standard beforeStd* / afterStd* methods on ConnectorCustomizer
+    const proto = Object.getPrototypeOf(customizer)
+    for (const method of Object.getOwnPropertyNames(proto)) {
+        if (typeof (customizer as any)[method] !== 'function') continue
+        if (method.startsWith('beforeStd')) {
+            ;(customizer as any)[method](runBeforeOperations(method))
+        } else if (method.startsWith('afterStd')) {
+            ;(customizer as any)[method](runAfterOperations(method))
+        }
+    }
+
+    // 2. Register Web Services / customizedOperation hooks from config (if available at init)
+    const registerOp = (opName: string, phase: 'before' | 'after' | '*') => {
+        if (!opName || opName.includes('*')) return
+        if (phase === 'before' || phase === '*') {
+            const id = `${opName}:before`
+            customizer.customizedOperation(id, runBeforeOperations(id))
+        }
+        if (phase === 'after' || phase === '*') {
+            const id = `${opName}:after`
+            customizer.customizedOperation(id, runAfterOperations(id))
+        }
+    }
+
+    try {
+        const config: Config = await readConfig()
+        const operations = resolveOperationsFromConfig(config)
+
+        for (const pattern of Object.keys(operations)) {
+            const { hookPattern } = parsePattern(pattern)
+            const match = hookPattern.match(/^(.+):(before|after|\*)$/)
+            if (match) {
+                registerOp(match[1], match[2] as 'before' | 'after' | '*')
+            }
+        }
+
+        const connectionParams = (config as any)?.connectionParameters
+        if (Array.isArray(connectionParams)) {
+            for (const ep of connectionParams) {
+                if (typeof ep?.uniqueNameForEndPoint === 'string' && ep.uniqueNameForEndPoint.trim()) {
+                    registerOp(ep.uniqueNameForEndPoint.trim(), '*')
+                }
+            }
+        }
+    } catch {
+        // Config may not be present at initialization time in all environments;
+        // dynamic map fallback below handles on-demand resolution.
+    }
+
+    // 3. Dynamic lookup fallback for any on-demand customizedOperation or handler key
+    const wrapHandlerMap = (map: Map<string, any>, fallbackAllToBefore: boolean) => {
+        const origGet = map.get.bind(map)
+        const origHas = map.has.bind(map)
+
+        map.get = (key: string) => {
+            const existing = origGet(key)
+            if (existing) return existing
+            if (typeof key === 'string') {
+                if (key.endsWith(':after')) {
+                    const handler = runAfterOperations(key)
+                    map.set(key, handler)
+                    return handler
+                }
+                if (key.endsWith(':before') || fallbackAllToBefore) {
+                    const handler = runBeforeOperations(key)
+                    map.set(key, handler)
+                    return handler
+                }
+            }
+            return undefined
+        }
+
+        map.has = (key: string) => {
+            if (origHas(key)) return true
+            if (typeof key !== 'string') return false
+            return fallbackAllToBefore || key.endsWith(':before') || key.endsWith(':after')
+        }
+    }
+
+    wrapHandlerMap(customizer.customizedOperationHandlers, true)
+    wrapHandlerMap(customizer.handlers, false)
+
+    return customizer
 }
