@@ -70,6 +70,54 @@ index.ts                      ← entry point: automatically wires handlers to S
     > [!IMPORTANT]
     > For Web Services endpoint customizers to be executed, the target endpoint in Identity Security Cloud must have `"isBeforeCustomizer": true` (for `:before` hooks) and/or `"isAfterCustomizer": true` (for `:after` hooks) enabled in its endpoint configuration. Without these flags, the Web Services connector will not invoke the customizer for that endpoint.
 
+#### Well-known operations (standard SDK commands & hooks)
+
+The framework automatically binds to all 17 standard commands supported by the SailPoint Connector SDK. Each command exposes a paired **before** (`beforeStd*`) and **after** (`afterStd*`) hook:
+
+| Standard Command | Before Hook (`before*`) | After Hook (`after*`) | Description |
+| --- | --- | --- | --- |
+| `std:account:create` | `beforeStdAccountCreate` | `afterStdAccountCreate` | Create a new account |
+| `std:account:read` | `beforeStdAccountRead` | `afterStdAccountRead` | Read a single account by identity |
+| `std:account:update` | `beforeStdAccountUpdate` | `afterStdAccountUpdate` | Update attributes or entitlement changes on an account |
+| `std:account:delete` | `beforeStdAccountDelete` | `afterStdAccountDelete` | Delete an account |
+| `std:account:enable` | `beforeStdAccountEnable` | `afterStdAccountEnable` | Enable an account |
+| `std:account:disable` | `beforeStdAccountDisable` | `afterStdAccountDisable` | Disable an account |
+| `std:account:unlock` | `beforeStdAccountUnlock` | `afterStdAccountUnlock` | Unlock an account |
+| `std:account:list` | `beforeStdAccountList` | `afterStdAccountList` | Iterate / aggregate accounts |
+| `std:change-password` | `beforeStdChangePassword` | `afterStdChangePassword` | Change or set account password |
+| `std:entitlement:read` | `beforeStdEntitlementRead` | `afterStdEntitlementRead` | Read a single entitlement |
+| `std:entitlement:list` | `beforeStdEntitlementList` | `afterStdEntitlementList` | Iterate / aggregate entitlements |
+| `std:test-connection` | `beforeStdTestConnection` | `afterStdTestConnection` | Test connector connectivity and credentials |
+| `std:authenticate` | `beforeStdAuthenticate` | `afterStdAuthenticate` | Pass-through authentication verification |
+| `std:config-options:read` | `beforeStdConfigOptions` | `afterStdConfigOptions` | Read connector configuration options |
+| `std:application-discovery:list` | `beforeStdApplicationDiscoveryList` | `afterStdApplicationDiscoveryList` | Discover applications supported by the source |
+| `std:source-data:discover` | `beforeStdSourceDataDiscover` | `afterStdSourceDataDiscover` | Discover source schema and object types |
+| `std:source-data:read` | `beforeStdSourceDataRead` | `afterStdSourceDataRead` | Read source data items |
+
+#### Hook pattern matching & wildcards
+
+You can target specific operations, groups of operations using wildcards, or scope execution to specific attributes:
+
+| Pattern | Phase | Matches | Description / Use Case |
+| --- | --- | --- | --- |
+| `before*` (or `beforeStd*`) | Before | All standard before hooks | Runs before every standard SDK command (e.g. logging, global input validation) |
+| `after*` (or `afterStd*`) | After | All standard after hooks | Runs after every standard SDK command (e.g. logging, response decoration) |
+| `beforeStdAccount*` | Before | All account before hooks | Matches `beforeStdAccountCreate`, `beforeStdAccountUpdate`, etc. |
+| `afterStdAccount*` | After | All account after hooks | Matches `afterStdAccountRead`, `afterStdAccountList`, etc. |
+| `beforeStdEntitlement*` | Before | All entitlement before hooks | Matches `beforeStdEntitlementRead`, `beforeStdEntitlementList` |
+| `afterStdEntitlement*` | After | All entitlement after hooks | Matches `afterStdEntitlementRead`, `afterStdEntitlementList` |
+| `*` or `*.*` | Both | All operations unconditionally | Runs on every before and after hook across standard and Web Services operations |
+| `<Endpoint>:before` | Before | Specific Web Services endpoint | Runs before the HTTP call for the named Web Services endpoint |
+| `<Endpoint>:after` | After | Specific Web Services endpoint | Runs after the HTTP call for the named Web Services endpoint |
+| `<Endpoint>:*` | Both | Specific Web Services endpoint | Runs both before and after the named Web Services endpoint |
+| `*:before` | Before | All Web Services endpoints | Runs before every configured Web Services endpoint |
+| `*:after` | After | All Web Services endpoints | Runs after every configured Web Services endpoint |
+| `*:*` | Both | All Web Services endpoints | Runs before and after every configured Web Services endpoint |
+
+Attribute filtering suffix (`.<attributePattern>`):
+- **Unconditional:** omit attribute pattern or use `.*` (e.g. `beforeStdAccountCreate` or `beforeStdAccountCreate.*`) to run on every invocation of that hook.
+- **Attribute-scoped:** append `.attributeName` (e.g. `beforeStdAccountCreate.sponsors` or `before*.sponsors`) to execute only when that attribute is present in the incoming payload or change set.
+
 ---
 
 ### Quick start — adding a custom attribute
