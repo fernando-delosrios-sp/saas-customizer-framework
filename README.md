@@ -7,14 +7,15 @@ A framework for building SailPoint SaaS Connector Customizers that extend any [s
 ### Architecture
 
 ```
-index.ts                      ← entry point: wires handlers to SDK commands
+index.ts                      ← entry point: automatically wires handlers to SDK commands & Web Services endpoints
 ├── customOperations.ts       ← named registry of available operation implementations
 ├── operationRunner.ts        ← generic engine: resolves source config → runs operations
 ├── utils.ts                  ← general utilities
 ├── model/
 │   ├── operation.ts          ← Operation / OperationMap type definitions
 │   └── config.ts             ← connector configuration interface (incl. customOperations)
-├── operations/               ← custom operations, grouped by connector type
+├── operations/               ← custom operations
+│   ├── peek.ts               ← generic: dumps execution context (context + payload) to log.info
 │   └── Microsoft-Entra/      ← operations for connectorId Microsoft-Entra
 │       ├── setSponsors.ts           ← handles deferred sponsor writes and clears (preSetSponsors, setSponsors)
 │       ├── getSponsors.ts           ← after: fetches sponsors from Graph
@@ -26,13 +27,14 @@ index.ts                      ← entry point: wires handlers to SDK commands
 
 ### How it works
 
-1. **`index.ts`** registers a single before-handler and a single after-handler for every standard SDK command (account list/read/create/update/disable/enable/unlock, change-password, entitlement list/read).
+1. **`index.ts`** initializes the customizer and automatically hooks all standard SDK commands (`beforeStd*` / `afterStd*`) as well as Web Services endpoint customizers (`<op>:before` / `<op>:after`).
 
 2. Each handler delegates to the **operation runner** in `operationRunner.ts`, which reads the source's **`customOperations`** connector attribute — a map from hook patterns to operation **names** — and resolves those names through the **operation registry** in `customOperations.ts`:
 
     ```typescript
     // customOperations.ts — registry of implementations (code)
     export const operationRegistry = {
+        peek,
         setSponsors,
         getSponsors,
         // ...
@@ -48,14 +50,25 @@ index.ts                      ← entry point: wires handlers to SDK commands
     }
     ```
 
-3. **Before operations** transform the SDK input in a pipeline (each function receives the input and returns a partial object to merge into the input). They only run when the input contains the relevant attribute, or unconditionally if mapped to `*.*`.
+3. **Before operations** transform the SDK input in a pipeline (each function receives the input and returns a partial object to merge into the input). They only run when the input contains the relevant attribute, or unconditionally if mapped without an attribute pattern (e.g. `'beforeStdTestConnection'`).
 
 4. **After operations** run against every output object. Each function receives the object and returns a partial object that the engine merges with the current item.
 
-5. Hook paths follow the `<hookPattern>.<attributePattern>` convention:
-    - `'beforeStdAccountCreate.sponsors'` → runs on beforeStdAccountCreate when 'sponsors' attribute is present
-    - `'afterStdAccountRead.*'` → runs on afterStdAccountRead unconditionally for all attributes
-    - `'*.*'` → runs on all hooks unconditionally
+5. Hook paths follow the `<hookPattern>[.<attributePattern>]` convention:
+    - **Standard operations:**
+      - `'beforeStdAccountCreate'` (or `'beforeStdAccountCreate.*'`) → runs unconditionally on `beforeStdAccountCreate` regardless of input attributes
+      - `'beforeStdAccountCreate.sponsors'` → runs on `beforeStdAccountCreate` only when `'sponsors'` attribute is present
+      - `'before*'` → runs on all standard before operations
+    - **Web Services endpoint operations:**
+      - `'Test Connection:before'` (or `'Test Connection:before.*'`) → runs unconditionally before the `Test Connection` endpoint executes
+      - `'Test Connection:after'` → runs unconditionally after the `Test Connection` endpoint executes
+      - `'Test Connection:*'` → runs on both `:before` and `:after` for that endpoint
+      - `'Update Account:before.sponsors'` → runs before `Update Account` only when `'sponsors'` attribute is present
+      - `'*:before'` → runs before any Web Services endpoint
+      - `'*:*'` or `'*'` / `'*.*'` → runs on all operations unconditionally
+
+    > [!IMPORTANT]
+    > For Web Services endpoint customizers to be executed, the target endpoint in Identity Security Cloud must have `"isBeforeCustomizer": true` (for `:before` hooks) and/or `"isAfterCustomizer": true` (for `:after` hooks) enabled in its endpoint configuration. Without these flags, the Web Services connector will not invoke the customizer for that endpoint.
 
 ---
 
@@ -120,10 +133,11 @@ All registry names below are defined in `src/customOperations.ts`. Reference the
 
 #### Quick reference
 
-Every builtin operation was written for the **Microsoft Entra ID** connector (`connectorId: Microsoft-Entra`) and, except for `getApplication`, calls Microsoft Graph using the source's `domainName`, `clientID`, and `clientSecret`. They are worked examples of the framework rather than connector-agnostic utilities — on any other source they will either skip or fail.
+The operations table below includes the generic `peek` operation (connector-agnostic) and several builtin operations written for the **Microsoft Entra ID** connector (`connectorId: Microsoft-Entra`). Except for `peek` and `getApplication`, the Entra ID operations call Microsoft Graph using the source's `domainName`, `clientID`, and `clientSecret`.
 
 | Registry name | Connector | Phase | Applies to | Reads from the object | Graph call | Effect |
 | --- | --- | --- | --- | --- | --- | --- |
+| `peek` | Generic (any connector) | before / after | Any standard command or Web Services endpoint | context and payload | none | Dumps the execution context (`context` and `payload`) to `logger.info` prefixed with `=== PEEK ===` in clean JSON format without modifying input or output. Stands out in logs for troubleshooting. |
 | `preSetSponsors` | Microsoft Entra ID (`Microsoft-Entra`) | before | User accounts, on create/update | `sponsors` (in `attributes` or `changes`), plus `identity` / `key.simple.id` / `attributes.objectId` | `POST /users/{id}/sponsors/$ref`, `DELETE /users/{id}/sponsors/{sponsorId}/$ref` | Writes or clears the sponsor immediately on update; on create caches it for `setSponsors`. Always strips `sponsors` from the payload so the base connector cannot 400 on it. |
 | `setSponsors` | Microsoft Entra ID (`Microsoft-Entra`) | after | User accounts, on create | `identity`, falling back to the id cached by `preSetSponsors` | same as above | Applies the sponsor write that `preSetSponsors` deferred. Writes no ISC attribute. |
 | `getSponsors` | Microsoft Entra ID (`Microsoft-Entra`) | after | User accounts, on list/read | `identity` / `id` / `uuid` / `attributes.objectId` / `attributes.userPrincipalName` | `GET /users/{id}/sponsors` | Sets `attributes.sponsors` to the sponsor UPN, or an array of UPNs when there is more than one. |
@@ -132,6 +146,29 @@ Every builtin operation was written for the **Microsoft Entra ID** connector (`c
 | `getApplication` | Microsoft Entra ID (`Microsoft-Entra`) | after | Entitlements of type `applicationRole`, on list/read | `type` and `attributes.displayName` | none — pure string parsing | Sets `attributes.application` to the part of `displayName` after ` [on] `. |
 
 Graph permissions differ per operation: reading sponsors needs `User.Read.All` (or `Directory.Read.All`), writing them needs `User.ReadWrite.All`, `setGuestGalVisibility` needs `User.ReadWrite.All`, and `getAppGroups` needs `Application.Read.All` (or `Directory.Read.All`).
+
+---
+
+#### `peek` — inspect execution context
+
+**Connector:** Generic (any connector, including Web Services)
+
+**Phase:** `before` / `after`
+
+**What for:** Dumps the invocation's execution context (`context` and the operation input/output `payload`) to `logger.info` prefixed with `=== PEEK ===` (or `=== PEEK [i/N] ===` when chunked) without mutating the payload. Uses single quotes (`'`) instead of double quotes (`"`) so that Pino/ISC loggers do not escape quotes as `\"`. Large payloads are automatically partitioned into valid, standalone stringified JSON objects (`{...}`) under 2000 characters to prevent container log truncation.
+
+**How to use:** Attach `peek` to any standard hook or Web Services endpoint operation:
+
+```json
+{
+  "customOperations": {
+    "beforeStdTestConnection": ["peek"],
+    "Test Connection:before": ["peek"],
+    "Get Accounts:*": ["peek"],
+    "beforeStdAccountCreate.sponsors": ["peek", "preSetSponsors"]
+  }
+}
+```
 
 ---
 
@@ -289,6 +326,21 @@ Example Entra ID wiring (add as a source connector attribute):
 }
 ```
 
+Example Web Services wiring (supports `<op>:before`, `<op>:after`, and `<op>:*`):
+
+```json
+{
+  "customOperations": {
+    "Test Connection:before": ["peek"],
+    "Account Aggregation:*": ["peek"],
+    "Create Account:before.customAttribute": ["peek"]
+  }
+}
+```
+
+> [!NOTE]
+> Web Services endpoints must have `"isBeforeCustomizer": true` (for `:before` operations) and/or `"isAfterCustomizer": true` (for `:after` operations) configured on the endpoint definition in Identity Security Cloud for the customizer to be considered by the connector.
+
 ISC connector attributes are often strings, so `customOperations` may also be stored as a JSON string — the runner parses either form. If the field is missing or empty, no custom operations run. Unknown operation names are skipped with a warning log.
 
 ---
@@ -328,6 +380,7 @@ Controlled by `spConnDebugLoggingEnabled`:
 | Auth errors from Graph                          | Check `clientID`, `clientSecret`, `domainName` and required Graph permissions (`User.Read.All`, `Directory.Read.All`)                                                                                      |
 | Missing attributes on output                    | Verify the incoming object contains the fields your operations use (`objectId`, `userPrincipalName`, `uuid`, `type`). Add null checks as needed.                                                           |
 | Operations never run                            | Ensure the source has a `customOperations` attribute mapping hook patterns to registry names. Missing/empty config means no ops run.                                                                       |
+| Web Services customizer never runs              | Ensure the target endpoint configuration in ISC has `"isBeforeCustomizer": true` (for `:before`) and/or `"isAfterCustomizer": true` (for `:after`) set, in addition to configuring `customOperations`.     |
 | `Unknown custom operation` warning              | The name in config is not registered in `operationRegistry` (`customOperations.ts`). Check spelling or add the implementation.                                                                            |
 | 404 on aggregation with `sponsors` in `$select` | `sponsors` is a Graph navigation property (requires `$expand`, not `$select`). Configure the attribute in ISC so the base connector does not fetch it — the customizer handles it via a separate API call. |
 | Graph throttling / failures                     | Check logs for `Error fetching ...` messages. Consider adding retry/backoff in the client methods.                                                                                                         |

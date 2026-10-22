@@ -3,6 +3,7 @@ import { getSponsors } from './operations/Microsoft-Entra/getSponsors'
 import { getAppGroups } from './operations/Microsoft-Entra/getAppGroups'
 import { getApplication } from './operations/Microsoft-Entra/getApplication'
 import { setGuestGalVisibility } from './operations/Microsoft-Entra/setGuestGalVisibility'
+import { peek } from './operations/peek'
 import { BeforeOperation, AfterOperation } from './model/operation'
 
 /**
@@ -18,6 +19,7 @@ import { BeforeOperation, AfterOperation } from './model/operation'
  *   3. Wire the key into the source's `customOperations` config map
  */
 export const operationRegistry: Record<string, BeforeOperation<any> | AfterOperation<any>> = {
+    peek,
     preSetSponsors,
     setSponsors,
     getSponsors,
