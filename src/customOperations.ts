@@ -3,6 +3,7 @@ import { getSponsors } from './operations/Microsoft-Entra/getSponsors'
 import { getAppGroups } from './operations/Microsoft-Entra/getAppGroups'
 import { getApplication } from './operations/Microsoft-Entra/getApplication'
 import { setGuestGalVisibility } from './operations/Microsoft-Entra/setGuestGalVisibility'
+import { getAgentDisplayName } from './operations/Microsoft-Entra/getAgentDisplayName'
 import { peek } from './operations/peek'
 import { BeforeOperation, AfterOperation } from './model/operation'
 
@@ -26,4 +27,5 @@ export const operationRegistry: Record<string, BeforeOperation<any> | AfterOpera
     getAppGroups,
     getApplication,
     setGuestGalVisibility,
+    getAgentDisplayName,
 }
