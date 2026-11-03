@@ -261,9 +261,6 @@ export const getAgentDisplayName: AfterOperation<AccountAfterOperationInput> = a
     return {
         attributes: {
             ...out.attributes,
-            // Returning the generated display name for common target attributes
-            displayName: resolvedName,
-            agentDisplayName: resolvedName,
             spn_agentName: resolvedName
         }
     }
