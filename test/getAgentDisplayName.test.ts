@@ -37,15 +37,15 @@ describe('getAgentDisplayName logic', () => {
     ]
 
     describe('extractAgentDisplayName', () => {
-        it('prefers metadata.displayName when present', () => {
+        it('prefers exact agent name (versioned) when present', () => {
             const name = extractAgentDisplayName(mockAgents[0])
-            expect(name).toBe('Accounts Payable Intake Agent')
+            expect(name).toBe('ap-intake-agent v1')
         })
 
         it('falls back to agentName and version when metadata is missing', () => {
             const agent: AIAgentIdentity = {
                 id: '123',
-                name: 'test-agent',
+                name: '',
                 attributes: {
                     agentName: 'test-agent',
                     version: '2'
@@ -54,12 +54,12 @@ describe('getAgentDisplayName logic', () => {
             expect(extractAgentDisplayName(agent)).toBe('test-agent v2')
         })
 
-        it('falls back to agent name when no attributes exist', () => {
+        it('falls back to agent id when no attributes exist', () => {
             const agent: AIAgentIdentity = {
                 id: '123',
-                name: 'fallback-name'
+                name: ''
             }
-            expect(extractAgentDisplayName(agent)).toBe('fallback-name')
+            expect(extractAgentDisplayName(agent)).toBe('123')
         })
     })
 
@@ -102,18 +102,18 @@ describe('getAgentDisplayName logic', () => {
     })
 
     describe('deriveAgentDisplayNameFromAccountName', () => {
-        it('cleans Azure AI Foundry Blueprint account name', () => {
+        it('cleans Azure AI Foundry Blueprint account name and appends version', () => {
             const clean = deriveAgentDisplayNameFromAccountName(
                 'aif-emeatesteam-proj-finance-ap-intake-agent-a7298-AgentIdentityBlueprint'
             )
-            expect(clean).toBe('ap-intake-agent')
+            expect(clean).toBe('ap-intake-agent v1')
         })
 
-        it('cleans Azure AI Foundry Instance account name', () => {
+        it('cleans Azure AI Foundry Instance account name and appends version', () => {
             const clean = deriveAgentDisplayNameFromAccountName(
                 'aif-emeatesteam-proj-finance-ap-intake-agent-AgentIdentity'
             )
-            expect(clean).toBe('ap-intake-agent')
+            expect(clean).toBe('ap-intake-agent v1')
         })
     })
 })

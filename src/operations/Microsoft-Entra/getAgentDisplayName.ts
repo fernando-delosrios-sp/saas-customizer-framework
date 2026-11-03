@@ -39,8 +39,23 @@ export interface AIAgentIdentity {
 
 /**
  * Extracts the user-friendly display name of an AI Agent from its Machine Identity.
+ * Returns the exact versioned identity name (e.g. "ap-intake-agent v1") to match
+ * the Machine Identity in ISC.
  */
 export function extractAgentDisplayName(agent: AIAgentIdentity): string {
+    // 1. Direct machine identity name (e.g. "ap-intake-agent v1")
+    if (agent.name) {
+        return agent.name
+    }
+
+    // 2. Constructed agentName + version
+    if (agent.attributes?.agentName) {
+        return agent.attributes.version
+            ? `${agent.attributes.agentName} v${agent.attributes.version}`
+            : agent.attributes.agentName
+    }
+
+    // 3. Fallback to metadata displayName
     if (agent.attributes?.metadata) {
         try {
             const meta = typeof agent.attributes.metadata === 'string'
@@ -52,13 +67,7 @@ export function extractAgentDisplayName(agent: AIAgentIdentity): string {
         }
     }
 
-    if (agent.attributes?.agentName) {
-        return agent.attributes.version
-            ? `${agent.attributes.agentName} v${agent.attributes.version}`
-            : agent.attributes.agentName
-    }
-
-    return agent.name
+    return agent.id
 }
 
 /**
@@ -135,6 +144,11 @@ export function deriveAgentDisplayNameFromAccountName(accountName: string): stri
             if (firstDash !== -1) {
                 clean = afterProj.substring(firstDash + 1)
             }
+        }
+        // If it's a foundry agent without an explicit version in the name, append default 'v1'
+        // to match the versioned machine identity (e.g. "ap-intake-agent v1")
+        if (clean && !/\s+v\d+$/i.test(clean)) {
+            clean = `${clean} v1`
         }
     }
 
