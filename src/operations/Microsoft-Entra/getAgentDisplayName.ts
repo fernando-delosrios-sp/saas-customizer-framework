@@ -268,3 +268,5 @@ export const getAgentDisplayName: AfterOperation<AccountAfterOperationInput> = a
         }
     }
 }
+getAgentDisplayName.defaultAttribute = 'spn_agentName'
+

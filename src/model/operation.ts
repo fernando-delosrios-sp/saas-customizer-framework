@@ -76,8 +76,12 @@ export type AnyBeforeOperationInput = AccountBeforeOperationInput | EntitlementB
 /**
  * A before operation transforms the SDK input in a pipeline fashion.
  * It receives the full input object and must return the (possibly modified) input.
+ * Can define an optional `defaultAttribute` representing the attribute it primarily acts on.
  */
-export type BeforeOperation<T extends AnyBeforeOperationInput = AnyBeforeOperationInput> = (context: Context, input: T) => Promise<Partial<T> | undefined>
+export type BeforeOperation<T extends AnyBeforeOperationInput = AnyBeforeOperationInput> = {
+    (context: Context, input: T): Promise<Partial<T> | undefined>
+    defaultAttribute?: string
+}
 
 // ---------------------------------------------------------------------------
 // After-operation types
@@ -120,8 +124,13 @@ export type AnyAfterOperationInput = AccountAfterOperationInput | EntitlementAft
 /**
  * An after operation returns an object containing the attributes to be merged into the output object.
  * Returns undefined if no modification is needed.
+ * Can define an optional `defaultAttribute` representing the fallback output attribute
+ * when no specific attribute or a wildcard is specified in the rule.
  */
-export type AfterOperation<T extends AnyAfterOperationInput = AnyAfterOperationInput> = (context: Context, object: T) => Promise<Partial<T> | undefined>
+export type AfterOperation<T extends AnyAfterOperationInput = AnyAfterOperationInput> = {
+    (context: Context, object: T): Promise<Partial<T> | undefined>
+    defaultAttribute?: string
+}
 
 // ---------------------------------------------------------------------------
 // Unified operation types

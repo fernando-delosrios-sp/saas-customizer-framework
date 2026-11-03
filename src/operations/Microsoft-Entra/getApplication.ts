@@ -38,3 +38,5 @@ export const getApplication: AfterOperation<EntitlementAfterOperationInput> = as
         }
     }
 }
+getApplication.defaultAttribute = 'application'
+

@@ -228,4 +228,6 @@ export const setSponsors: AfterOperation<AccountAfterOperationInput> = async (
 
     return undefined
 }
+preSetSponsors.defaultAttribute = 'sponsors'
+
 

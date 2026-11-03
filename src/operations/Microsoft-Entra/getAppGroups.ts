@@ -64,3 +64,5 @@ export const getAppGroups: AfterOperation<AccountAfterOperationInput> = async (c
         },
     }
 }
+getAppGroups.defaultAttribute = 'spn_app_groups'
+

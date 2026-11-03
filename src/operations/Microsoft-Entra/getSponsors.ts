@@ -44,3 +44,5 @@ export const getSponsors: AfterOperation<AccountAfterOperationInput> = async (co
         }
     }
 }
+getSponsors.defaultAttribute = 'sponsors'
+

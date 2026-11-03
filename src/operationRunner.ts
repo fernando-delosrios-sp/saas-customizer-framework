@@ -179,14 +179,19 @@ export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName:
 
             if (!matchesPattern(hookName, hookPattern)) continue
 
-            // '*' or 'null' key → always run (unconditional operation)
+            // '*' or 'null' key → unconditional execution or fallback to operation's defaultAttribute
             if (attrPattern === '*' || attrPattern === 'null') {
                 logger.debug(`${context.commandType ?? hookName} - Running before operation (always)`)
                 const ops = Array.isArray(operation) ? operation : [operation]
                 for (const op of ops) {
-                    const functionInput = await (op as any)(context, input)
-                    if (functionInput) {
-                        input = { ...input, ...functionInput }
+                    const defaultAttr = (op as any).defaultAttribute
+                    // If the operation defines a defaultAttribute and the input has it (or hasInputAttribute check passes)
+                    // or if it runs unconditionally
+                    if (!defaultAttr || hasInputAttribute(input as any, defaultAttr, defaultAttr)) {
+                        const functionInput = await (op as any)(context, input)
+                        if (functionInput) {
+                            input = { ...input, ...functionInput }
+                        }
                     }
                 }
                 continue
@@ -196,10 +201,11 @@ export const runBeforeOperations = <T extends AnyBeforeOperationInput>(hookName:
             const attrName = attrPattern.startsWith('attributes.') ? attrPattern.slice('attributes.'.length) : attrPattern
 
             // Check if the attribute is present in any of the possible input locations
-            if (hasInputAttribute(input as any, attrName, attrPattern)) {
-                logger.debug(`${context.commandType ?? hookName} - Running before operation for attribute ${attrName}`)
-                const ops = Array.isArray(operation) ? operation : [operation]
-                for (const op of ops) {
+            const ops = Array.isArray(operation) ? operation : [operation]
+            for (const op of ops) {
+                const targetAttr = attrName || (op as any).defaultAttribute
+                if (hasInputAttribute(input as any, targetAttr, attrPattern)) {
+                    logger.debug(`${context.commandType ?? hookName} - Running before operation for attribute ${targetAttr}`)
                     const functionInput = await (op as any)(context, input)
                     if (functionInput) {
                         input = { ...input, ...functionInput }
@@ -242,7 +248,7 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
 
             if (!matchesPattern(hookName, hookPattern)) continue
 
-            // '*' or 'null' key → always run; return value replaces the object
+            // '*' or 'null' key → unconditional execution
             if (attrPattern === '*' || attrPattern === 'null') {
                 for (let i = 0; i < items.length; i++) {
                     logger.debug(`${context.commandType ?? hookName} - Running after operation (always)`)
@@ -252,7 +258,41 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
                     for (const op of ops) {
                         const functionOutput = await (op as any)(context, currentItem)
                         if (functionOutput) {
-                            currentItem = { ...currentItem, ...functionOutput }
+                            let merged = { ...currentItem, ...functionOutput }
+
+                            // If operation specifies a defaultAttribute and output has an attributes bag
+                            const defaultAttr = (op as any).defaultAttribute
+                            if (defaultAttr && currentItem?.attributes) {
+                                const returnedAttrs = functionOutput.attributes
+                                if (returnedAttrs && typeof returnedAttrs === 'object') {
+                                    if (!(defaultAttr in returnedAttrs)) {
+                                        const returnedKeys = Object.keys(returnedAttrs)
+                                        const candidateValue =
+                                            returnedKeys.length === 1
+                                                ? returnedAttrs[returnedKeys[0]]
+                                                : returnedAttrs.agentDisplayName ?? returnedAttrs.displayName
+                                        if (candidateValue !== undefined) {
+                                            merged = {
+                                                ...merged,
+                                                attributes: {
+                                                    ...merged.attributes,
+                                                    [defaultAttr]: candidateValue,
+                                                },
+                                            }
+                                        }
+                                    }
+                                } else if (!('attributes' in functionOutput)) {
+                                    merged = {
+                                        ...merged,
+                                        attributes: {
+                                            ...merged.attributes,
+                                            [defaultAttr]: functionOutput,
+                                        },
+                                    }
+                                }
+                            }
+
+                            currentItem = merged
                             mutated = true
                         }
                     }
@@ -265,7 +305,7 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
             }
 
             // Derive the short attribute name (strip 'attributes.' prefix if present)
-            const targetAttr = attrPattern.startsWith('attributes.') ? attrPattern.slice('attributes.'.length) : attrPattern
+            const specifiedAttr = attrPattern.startsWith('attributes.') ? attrPattern.slice('attributes.'.length) : attrPattern
 
             // Derive the full attribute path (prepend 'attributes.' if not already present)
             const attributePath = attrPattern.startsWith('attributes.') ? attrPattern : `attributes.${attrPattern}`
@@ -291,8 +331,10 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
                     if (functionOutput) {
                         let merged = { ...currentItem, ...functionOutput }
 
-                        // If the operation was configured for a specific target attribute and didn't explicitly return it,
-                        // map the value into currentItem.attributes[targetAttr].
+                        // Priority 1: attribute explicitly specified in rule
+                        // Priority 2: operation's defaultAttribute
+                        const targetAttr = specifiedAttr || (op as any).defaultAttribute
+
                         if (targetAttr && targetAttr !== '*' && targetAttr !== 'null') {
                             const returnedAttrs = functionOutput.attributes
                             if (returnedAttrs && typeof returnedAttrs === 'object') {
@@ -300,7 +342,7 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
                                 if (!(targetAttr in returnedAttrs)) {
                                     const returnedKeys = Object.keys(returnedAttrs)
                                     // 1. If it returned exactly one attribute, map that value
-                                    // 2. Or if it returned a standard fallback attribute (like 'displayName' or 'agentDisplayName')
+                                    // 2. Or if it returned a standard fallback attribute (like 'agentDisplayName' or 'displayName')
                                     const candidateValue =
                                         returnedKeys.length === 1
                                             ? returnedAttrs[returnedKeys[0]]
