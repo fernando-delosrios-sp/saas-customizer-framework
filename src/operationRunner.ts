@@ -264,6 +264,9 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
                 continue
             }
 
+            // Derive the short attribute name (strip 'attributes.' prefix if present)
+            const targetAttr = attrPattern.startsWith('attributes.') ? attrPattern.slice('attributes.'.length) : attrPattern
+
             // Derive the full attribute path (prepend 'attributes.' if not already present)
             const attributePath = attrPattern.startsWith('attributes.') ? attrPattern : `attributes.${attrPattern}`
 
@@ -286,7 +289,46 @@ export const runAfterOperations = <T extends AnyAfterOperationInput>(hookName: s
                 for (const op of ops) {
                     const functionOutput = await (op as any)(context, currentItem)
                     if (functionOutput) {
-                        currentItem = { ...currentItem, ...functionOutput }
+                        let merged = { ...currentItem, ...functionOutput }
+
+                        // If the operation was configured for a specific target attribute and didn't explicitly return it,
+                        // map the value into currentItem.attributes[targetAttr].
+                        if (targetAttr && targetAttr !== '*' && targetAttr !== 'null') {
+                            const returnedAttrs = functionOutput.attributes
+                            if (returnedAttrs && typeof returnedAttrs === 'object') {
+                                // If the operation returned attributes but not targetAttr specifically:
+                                if (!(targetAttr in returnedAttrs)) {
+                                    const returnedKeys = Object.keys(returnedAttrs)
+                                    // 1. If it returned exactly one attribute, map that value
+                                    // 2. Or if it returned a standard fallback attribute (like 'displayName' or 'agentDisplayName')
+                                    const candidateValue =
+                                        returnedKeys.length === 1
+                                            ? returnedAttrs[returnedKeys[0]]
+                                            : returnedAttrs.agentDisplayName ?? returnedAttrs.displayName
+
+                                    if (candidateValue !== undefined) {
+                                        merged = {
+                                            ...merged,
+                                            attributes: {
+                                                ...merged.attributes,
+                                                [targetAttr]: candidateValue,
+                                            },
+                                        }
+                                    }
+                                }
+                            } else if (!('attributes' in functionOutput)) {
+                                // If operation directly returned a scalar value or custom object
+                                merged = {
+                                    ...merged,
+                                    attributes: {
+                                        ...merged.attributes,
+                                        [targetAttr]: functionOutput,
+                                    },
+                                }
+                            }
+                        }
+
+                        currentItem = merged
                         mutated = true
                     }
                 }
